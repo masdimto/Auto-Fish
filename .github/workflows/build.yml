@@ -15,6 +15,6 @@ jobs:
       - name: Upload DLL
         uses: actions/upload-artifact@v4
         with:
-          name: AutoFishing-Plugin
-          path: bin/Release/net9.0/AutoFishing.dll
+          name: AutoFish-Plugin
+          path: bin/Release/net9.0/AutoFish.dll
           
