@@ -4,7 +4,6 @@ using System.Reflection;
 using Terraria;
 using TerrariaApi.Server;
 using TShockAPI;
-using Microsoft.Xna.Framework;
 
 namespace AutoFishingPlugin
 {
@@ -12,7 +11,7 @@ namespace AutoFishingPlugin
     public class AutoFishing : TerrariaPlugin
     {
         public override string Name => "AutoFishing";
-        public override Version Version => new Version(1, 2, 0);
+        public override Version Version => new Version(1, 2, 1);
         public override string Author => "CustomPlugin";
         public override string Description => "Auto fishing menggunakan FishingCheck asli Terraria sesuai biome.";
 
@@ -24,7 +23,6 @@ namespace AutoFishingPlugin
 
         public override void Initialize()
         {
-            // Ambil metode FishingCheck asli milik Terraria
             fishingCheckMethod = typeof(Projectile).GetMethod("FishingCheck", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
 
             ServerApi.Hooks.GameUpdate.Register(this, OnGameUpdate);
@@ -68,7 +66,7 @@ namespace AutoFishingPlugin
         private void OnGameUpdate(EventArgs args)
         {
             tickCounter++;
-            if (tickCounter < 10) return; // Cek setiap ~0.16 detik
+            if (tickCounter < 10) return;
             tickCounter = 0;
 
             foreach (int playerIndex in enabledPlayers)
@@ -81,16 +79,13 @@ namespace AutoFishingPlugin
                     Projectile proj = Main.projectile[i];
                     if (proj.active && proj.owner == playerIndex && proj.bobber)
                     {
-                        // ai[1] < 0 menandakan pelampung bergerak disambar ikan/crate/item
                         if (proj.ai[1] < 0f)
                         {
-                            // Panggil FishingCheck() asli Terraria agar biome, crate, quest, & umpan diproses
                             if (fishingCheckMethod != null)
                             {
                                 fishingCheckMethod.Invoke(proj, null);
                             }
 
-                            // Jika item hasil tangkapan tersimpan di localAI[1] (atau ai[1] positif setelah check), berikan/munculkan
                             int caughtItem = (int)proj.localAI[1];
                             if (caughtItem <= 0 && proj.ai[1] > 0f)
                             {
@@ -99,19 +94,9 @@ namespace AutoFishingPlugin
 
                             if (caughtItem > 0)
                             {
-                                int itemIdx = Item.NewItem(
-                                    proj.GetSource_FromThis(),
-                                    (int)tsPlayer.TPlayer.position.X,
-                                    (int)tsPlayer.TPlayer.position.Y,
-                                    tsPlayer.TPlayer.width,
-                                    tsPlayer.TPlayer.height,
-                                    caughtItem,
-                                    1
-                                );
-                                NetMessage.SendData((int)PacketTypes.ItemDrop, -1, -1, null, itemIdx);
+                                tsPlayer.GiveItem(caughtItem, 1);
                             }
 
-                            // Reset pelampung supaya otomatis lanjut memancing tanpa hilang dari air
                             proj.ai[0] = 0f;
                             proj.ai[1] = 0f;
                             proj.localAI[1] = 0f;
