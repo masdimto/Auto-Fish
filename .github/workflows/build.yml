@@ -9,12 +9,12 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '6.0.x'
+          dotnet-version: '9.0.x'
       - name: Build DLL
         run: dotnet build -c Release
       - name: Upload DLL
         uses: actions/upload-artifact@v4
         with:
           name: AutoFishing-Plugin
-          path: bin/Release/net6.0/AutoFishing.dll
+          path: bin/Release/net9.0/AutoFishing.dll
           
