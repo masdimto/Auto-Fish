@@ -6,12 +6,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="OTAPI.Upcoming" Version="*" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Reference Include="TShockAPI">
-      <HintPath>libs/TShockAPI.dll</HintPath>
-    </Reference>
+    <PackageReference Include="TShock" Version="*" />
   </ItemGroup>
 </Project>
