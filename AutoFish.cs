@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using Terraria;
+using Terraria.DataStructures;
 using TerrariaApi.Server;
 using TShockAPI;
 using Microsoft.Xna.Framework;
@@ -11,9 +13,9 @@ namespace AutoFishingPlugin
     public class AutoFishing : TerrariaPlugin
     {
         public override string Name => "AutoFishing";
-        public override Version Version => new Version(1, 0, 0);
+        public override Version Version => new Version(1, 1, 0);
         public override string Author => "CustomPlugin";
-        public override string Description => "Otomatis menarik ikan dan melempar pancing kembali.";
+        public override string Description => "Auto fishing akurat sesuai biome (ikan, crate, quest fish, dan treasure).";
 
         private HashSet<int> enabledPlayers = new HashSet<int>();
         private int tickCounter = 0;
@@ -56,14 +58,14 @@ namespace AutoFishingPlugin
             else
             {
                 enabledPlayers.Add(index);
-                args.Player.SendSuccessMessage("[AutoFish] Diaktifkan! Lempar pancingmu sekali ke air.");
+                args.Player.SendSuccessMessage("[AutoFish] Diaktifkan! Pegang joran dan lempar pancing sekali ke air.");
             }
         }
 
         private void OnGameUpdate(EventArgs args)
         {
             tickCounter++;
-            if (tickCounter < 15) return; // Cek setiap 0.25 detik agar ringan di server
+            if (tickCounter < 10) return; // Cek setiap ~0.16 detik
             tickCounter = 0;
 
             foreach (int playerIndex in enabledPlayers)
@@ -72,25 +74,55 @@ namespace AutoFishingPlugin
                 if (tsPlayer == null || !tsPlayer.Active || tsPlayer.TPlayer.dead) continue;
 
                 Player player = tsPlayer.TPlayer;
+                Item heldItem = player.HeldItem;
+
+                // Pastikan player sedang memegang joran pancing (fishingPole > 0)
+                if (heldItem == null || heldItem.fishingPole <= 0) continue;
 
                 for (int i = 0; i < Main.maxProjectiles; i++)
                 {
                     Projectile proj = Main.projectile[i];
                     if (proj.active && proj.owner == playerIndex && proj.bobber)
                     {
-                        // ai[1] < 0 menandakan ikan/item sudah menyambar pancing
-                        if (proj.ai[1] < 0)
+                        // ai[1] < 0 menandakan pelampung bergerak disambar ikan/crate/item
+                        if (proj.ai[1] < 0f && proj.ai[0] == 0f)
                         {
-                            int caughtItemType = (int)Math.Abs(proj.ai[1]);
-                            if (caughtItemType > 0)
+                            // Simpan posisi dan kecepatan lemparan awal untuk melempar ulang otomatis
+                            Vector2 spawnPos = player.RotatedRelativePoint(player.MountedCenter, true);
+                            Vector2 throwVel = proj.position - spawnPos;
+                            if (throwVel.Length() > 0)
                             {
-                                tsPlayer.GiveItem(caughtItemType, 1);
+                                throwVel.Normalize();
+                                throwVel *= heldItem.shootSpeed;
+                            }
+                            else
+                            {
+                                throwVel = new Vector2(player.direction * heldItem.shootSpeed, -2f);
                             }
 
-                            // Reset status bobber agar otomatis lanjut memancing tanpa lempar ulang manual
-                            proj.ai[1] = 0f;
-                            proj.localAI[1] = 0f;
+                            int bobberType = proj.type;
+
+                            // 1. Paksa tarik pancing menggunakan mekanik asli Terraria (sesuai biome, bait, & quest)
+                            proj.ai[0] = 1f;
                             proj.netUpdate = true;
+
+                            // 2. Langsung lempar ulang pelampung baru agar mancing terus tanpa henti
+                            int newProj = Projectile.NewProjectile(
+                                new EntitySource_ItemUse(player, heldItem),
+                                spawnPos,
+                                throwVel,
+                                bobberType,
+                                0,
+                                0f,
+                                playerIndex
+                            );
+
+                            if (newProj >= 0 && newProj < Main.maxProjectiles)
+                            {
+                                Main.projectile[newProj].netUpdate = true;
+                            }
+
+                            break;
                         }
                     }
                 }
