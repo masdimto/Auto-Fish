@@ -4,7 +4,6 @@ using System.IO;
 using System.Reflection;
 using Microsoft.Xna.Framework;
 using Terraria;
-using Terraria.DataStructures;
 using Terraria.ID;
 using TerrariaApi.Server;
 using TShockAPI;
@@ -15,7 +14,7 @@ namespace AutoFishingPlugin
     public class AutoFishing : TerrariaPlugin
     {
         public override string Name => "AutoFishing";
-        public override Version Version => new Version(1, 4, 0);
+        public override Version Version => new Version(1, 4, 1);
         public override string Author => "CustomPlugin";
         public override string Description => "Auto fishing (/af), Multi-Kail 5 Tier Pancingan otomatis, dan Bonus +10 Fishing Power per 5 Quest Angler (mulai dari 0, maks 50 quest).";
 
@@ -30,7 +29,6 @@ namespace AutoFishingPlugin
         private int tickCounter = 0;
         private MethodInfo fishingCheckMethod;
 
-        // Multi-Kail & Progres Quest Angler Server (Mulai 0, Maks 50 Quest)
         private int[] multiBobberCooldown = new int[Main.maxPlayers];
         private Dictionary<int, int> lastVanillaQuests = new Dictionary<int, int>();
         private Dictionary<string, int> serverQuestCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -137,7 +135,6 @@ namespace AutoFishingPlugin
                 multiBobberCooldown[who] = 0;
         }
 
-        // Otomatis menggandakan kail saat pancing dilempar sesuai 5 Tier Pancingan
         private void OnGetData(GetDataEventArgs args)
         {
             if (args.Handled || (int)args.MsgID != 27) return;
@@ -176,7 +173,7 @@ namespace AutoFishingPlugin
                                 Vector2 newVel = new Vector2(velocity.X + spreadX, velocity.Y + spreadY);
 
                                 int newProjIdx = Projectile.NewProjectile(
-                                    new EntitySource_Misc("MultiBobber"),
+                                    Projectile.GetNoneSource(),
                                     position.X,
                                     position.Y,
                                     newVel.X,
@@ -200,7 +197,6 @@ namespace AutoFishingPlugin
             catch { }
         }
 
-        // Terapkan Bonus +10 Fishing Power per 5 Quest Server (Mulai 0, Maks 50 Quest = +100 FP)
         private void OnProjectileAIUpdate(ProjectileAiUpdateEventArgs args)
         {
             Projectile proj = args.Projectile;
@@ -230,16 +226,16 @@ namespace AutoFishingPlugin
                 case ItemID.ScarabFishingRod:
                 case ItemID.FiberglassFishingPole:
                 case ItemID.MechanicsRod:          return 3; // Tier 3 (30-35%)
-                case ItemID.FisherOfSouls:
+                case ItemID.FisherofSouls:
                 case ItemID.Fleshcatcher:
-                case ItemID.ChumCaster:            return 2; // Tier 2 (20-25%)
+                case ItemID.BloodFishingRod:       return 2; // Tier 2 (20-25% - Chum Caster)
                 default:                           return 1; // Tier 1 (5-15%)
             }
         }
 
         private bool IsFishingBobber(int projType)
         {
-            if (projType >= 0 && projType < Main.maxProjectileTypes)
+            if (projType >= 0 && projType < ProjectileID.Count)
                 return !Main.projPet[projType] && ContentSamples.ProjectilesByType.TryGetValue(projType, out Projectile sample) && sample.bobber;
             return false;
         }
@@ -292,7 +288,6 @@ namespace AutoFishingPlugin
 
         private void OnGameUpdate(EventArgs args)
         {
-            // 1. Update cooldown multi-kail & lacak progres quest Angler server
             for (int i = 0; i < Main.maxPlayers; i++)
             {
                 if (multiBobberCooldown[i] > 0)
@@ -333,7 +328,6 @@ namespace AutoFishingPlugin
                 }
             }
 
-            // 2. Proses AutoFish (/af) untuk semua kail yang aktif
             tickCounter++;
             if (tickCounter < 10) return;
             tickCounter = 0;
