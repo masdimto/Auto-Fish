@@ -14,9 +14,9 @@ namespace AutoFishingPlugin
     public class AutoFishing : TerrariaPlugin
     {
         public override string Name => "AutoFishing";
-        public override Version Version => new Version(1, 4, 1);
+        public override Version Version => new Version(1, 4, 2);
         public override string Author => "CustomPlugin";
-        public override string Description => "Auto fishing (/af), Multi-Kail 5 Tier Pancingan otomatis, dan Bonus +10 Fishing Power per 5 Quest Angler (mulai dari 0, maks 50 quest).";
+        public override string Description => "Auto fishing (/af) support Blood Moon enemy, Multi-Kail 5 Tier Pancingan stabil, dan Bonus +10 FP per 5 Quest (mulai 0, maks 50 quest).";
 
         private enum FishMode
         {
@@ -29,7 +29,10 @@ namespace AutoFishingPlugin
         private int tickCounter = 0;
         private MethodInfo fishingCheckMethod;
 
+        // Pelacak kail yang sudah digandakan agar tidak memicu kloning berulang
+        private HashSet<int> clonedBobberIdentities = new HashSet<int>();
         private int[] multiBobberCooldown = new int[Main.maxPlayers];
+
         private Dictionary<int, int> lastVanillaQuests = new Dictionary<int, int>();
         private Dictionary<string, int> serverQuestCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         private string SaveFilePath => Path.Combine(TShock.SavePath, "AnglerQuestProgress.txt");
@@ -44,7 +47,6 @@ namespace AutoFishingPlugin
             ServerApi.Hooks.ServerJoin.Register(this, OnServerJoin);
             ServerApi.Hooks.ServerLeave.Register(this, OnServerLeave);
             ServerApi.Hooks.GameUpdate.Register(this, OnGameUpdate);
-            ServerApi.Hooks.NetGetData.Register(this, OnGetData);
             ServerApi.Hooks.ProjectileAIUpdate.Register(this, OnProjectileAIUpdate);
 
             Commands.ChatCommands.Add(new Command("autofish.use", ToggleAutoFish, "autofish", "af")
@@ -61,7 +63,6 @@ namespace AutoFishingPlugin
                 ServerApi.Hooks.ServerJoin.Deregister(this, OnServerJoin);
                 ServerApi.Hooks.ServerLeave.Deregister(this, OnServerLeave);
                 ServerApi.Hooks.GameUpdate.Deregister(this, OnGameUpdate);
-                ServerApi.Hooks.NetGetData.Deregister(this, OnGetData);
                 ServerApi.Hooks.ProjectileAIUpdate.Deregister(this, OnProjectileAIUpdate);
             }
             base.Dispose(disposing);
@@ -135,68 +136,7 @@ namespace AutoFishingPlugin
                 multiBobberCooldown[who] = 0;
         }
 
-        private void OnGetData(GetDataEventArgs args)
-        {
-            if (args.Handled || (int)args.MsgID != 27) return;
-
-            int plrIdx = args.Msg.whoAmI;
-            if (plrIdx < 0 || plrIdx >= Main.maxPlayers || multiBobberCooldown[plrIdx] > 0) return;
-
-            TSPlayer tsPlayer = TShock.Players[plrIdx];
-            if (tsPlayer == null || !tsPlayer.Active || tsPlayer.TPlayer == null) return;
-
-            try
-            {
-                using (MemoryStream ms = new MemoryStream(args.Msg.readBuffer, args.Index, args.Length - 1))
-                using (BinaryReader reader = new BinaryReader(ms))
-                {
-                    short projIdentity = reader.ReadInt16();
-                    Vector2 position = reader.ReadVector2();
-                    Vector2 velocity = reader.ReadVector2();
-                    byte owner = reader.ReadByte();
-                    short projType = reader.ReadInt16();
-
-                    if (IsFishingBobber(projType))
-                    {
-                        Item heldItem = tsPlayer.TPlayer.HeldItem;
-                        int totalBobbers = GetBobberCountForPole(heldItem != null ? heldItem.type : 0);
-
-                        if (totalBobbers > 1)
-                        {
-                            multiBobberCooldown[plrIdx] = 15;
-                            int extraCount = totalBobbers - 1;
-
-                            for (int k = 1; k <= extraCount; k++)
-                            {
-                                float spreadX = (k % 2 == 1 ? 1f : -1f) * (0.45f * ((k + 1) / 2));
-                                float spreadY = -0.25f * ((k + 1) / 2);
-                                Vector2 newVel = new Vector2(velocity.X + spreadX, velocity.Y + spreadY);
-
-                                int newProjIdx = Projectile.NewProjectile(
-                                    Projectile.GetNoneSource(),
-                                    position.X,
-                                    position.Y,
-                                    newVel.X,
-                                    newVel.Y,
-                                    projType,
-                                    0,
-                                    0f,
-                                    plrIdx
-                                );
-
-                                if (newProjIdx >= 0 && newProjIdx < Main.maxProjectiles)
-                                {
-                                    Main.projectile[newProjIdx].netUpdate = true;
-                                    NetMessage.SendData((int)PacketTypes.ProjectileNew, -1, -1, null, newProjIdx);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            catch { }
-        }
-
+        // Terapkan Bonus +10 Fishing Power per 5 Quest Server (Mulai 0, Maks 50 Quest = +100 FP)
         private void OnProjectileAIUpdate(ProjectileAiUpdateEventArgs args)
         {
             Projectile proj = args.Projectile;
@@ -231,13 +171,6 @@ namespace AutoFishingPlugin
                 case ItemID.BloodFishingRod:       return 2; // Tier 2 (20-25% - Chum Caster)
                 default:                           return 1; // Tier 1 (5-15%)
             }
-        }
-
-        private bool IsFishingBobber(int projType)
-        {
-            if (projType >= 0 && projType < ProjectileID.Count)
-                return !Main.projPet[projType] && ContentSamples.ProjectilesByType.TryGetValue(projType, out Projectile sample) && sample.bobber;
-            return false;
         }
 
         private void ToggleAutoFish(CommandArgs args)
@@ -288,6 +221,7 @@ namespace AutoFishingPlugin
 
         private void OnGameUpdate(EventArgs args)
         {
+            // 1. Update cooldown & lacak progres quest Angler server
             for (int i = 0; i < Main.maxPlayers; i++)
             {
                 if (multiBobberCooldown[i] > 0)
@@ -328,6 +262,65 @@ namespace AutoFishingPlugin
                 }
             }
 
+            // 2. Deteksi Multi-Kail langsung dari Main.projectile (100% stabil di Mobile/HP)
+            for (int p = 0; p < Main.maxProjectiles; p++)
+            {
+                Projectile proj = Main.projectile[p];
+                if (!proj.active || !proj.bobber) continue;
+
+                int owner = proj.owner;
+                if (owner < 0 || owner >= Main.maxPlayers) continue;
+
+                // Hanya proses kail baru yang belum pernah dikloning (timeLeft default kail = 36000)
+                if (proj.timeLeft >= 35990 && !clonedBobberIdentities.Contains(p) && multiBobberCooldown[owner] == 0)
+                {
+                    TSPlayer tsPlayer = TShock.Players[owner];
+                    if (tsPlayer != null && tsPlayer.Active && tsPlayer.TPlayer != null)
+                    {
+                        Item heldItem = tsPlayer.TPlayer.HeldItem;
+                        int totalBobbers = GetBobberCountForPole(heldItem != null ? heldItem.type : 0);
+
+                        if (totalBobbers > 1)
+                        {
+                            multiBobberCooldown[owner] = 20;
+                            clonedBobberIdentities.Add(p);
+
+                            int extraCount = totalBobbers - 1;
+                            for (int k = 1; k <= extraCount; k++)
+                            {
+                                float spreadX = (k % 2 == 1 ? 1f : -1f) * (0.55f * ((k + 1) / 2));
+                                float spreadY = -0.3f * ((k + 1) / 2);
+                                Vector2 newVel = new Vector2(proj.velocity.X + spreadX, proj.velocity.Y + spreadY);
+
+                                int newIdx = Projectile.NewProjectile(
+                                    Projectile.GetNoneSource(),
+                                    proj.position.X,
+                                    proj.position.Y,
+                                    newVel.X,
+                                    newVel.Y,
+                                    proj.type,
+                                    0,
+                                    0f,
+                                    owner
+                                );
+
+                                if (newIdx >= 0 && newIdx < Main.maxProjectiles)
+                                {
+                                    clonedBobberIdentities.Add(newIdx);
+                                    Main.projectile[newIdx].netUpdate = true;
+                                    NetMessage.SendData((int)PacketTypes.ProjectileNew, -1, -1, null, newIdx);
+                                }
+                            }
+                        }
+                    }
+                }
+                else if (proj.timeLeft < 35980)
+                {
+                    clonedBobberIdentities.Remove(p);
+                }
+            }
+
+            // 3. Proses AutoFish (/af) untuk item & monster Blood Moon
             tickCounter++;
             if (tickCounter < 10) return;
             tickCounter = 0;
@@ -351,10 +344,10 @@ namespace AutoFishingPlugin
                     Projectile proj = Main.projectile[i];
                     if (proj.active && proj.owner == playerIndex && proj.bobber && proj.ai[1] < 0f)
                     {
-                        int caughtItem = 0;
+                        int caughtResult = 0;
                         if (mode == FishMode.Real)
                         {
-                            caughtItem = RunFishingCheck(proj);
+                            caughtResult = RunFishingCheck(proj);
                         }
                         else
                         {
@@ -362,13 +355,29 @@ namespace AutoFishingPlugin
                             {
                                 proj.ai[1] = -1f;
                                 proj.localAI[1] = 0f;
-                                caughtItem = RunFishingCheck(proj);
-                                if (caughtItem > 0) break;
+                                caughtResult = RunFishingCheck(proj);
+                                if (caughtResult != 0) break;
                             }
                         }
 
-                        if (caughtItem > 0)
-                            tsPlayer.GiveItem(caughtItem, 1);
+                        if (caughtResult > 0)
+                        {
+                            // Hasil positif = Item / Ikan / Crate
+                            tsPlayer.GiveItem(caughtResult, 1);
+                        }
+                        else if (caughtResult < 0)
+                        {
+                            // Hasil negatif = Monster Blood Moon (-NPCID)
+                            int npcType = Math.Abs(caughtResult);
+                            int spawnX = (int)proj.Center.X;
+                            int spawnY = (int)proj.Center.Y - 16;
+                            int npcIdx = NPC.NewNPC(NPC.GetBossSpawnSource(playerIndex), spawnX, spawnY, npcType);
+                            if (npcIdx >= 0 && npcIdx < Main.maxNPCs)
+                            {
+                                Main.npc[npcIdx].netUpdate = true;
+                                NetMessage.SendData((int)PacketTypes.NpcUpdate, -1, -1, null, npcIdx);
+                            }
+                        }
 
                         proj.ai[0] = 0f;
                         proj.ai[1] = 0f;
@@ -388,10 +397,11 @@ namespace AutoFishingPlugin
             if (fishingCheckMethod != null)
                 fishingCheckMethod.Invoke(proj, null);
 
-            int item = (int)proj.localAI[1];
-            if (item <= 0 && proj.ai[1] > 0f)
-                item = (int)proj.ai[1];
-            return item;
+            // localAI[1] bisa positif (ID Item) atau negatif (-ID Monster Blood Moon)
+            int result = (int)proj.localAI[1];
+            if (result == 0 && proj.ai[1] > 0f)
+                result = (int)proj.ai[1];
+            return result;
         }
     }
 }
